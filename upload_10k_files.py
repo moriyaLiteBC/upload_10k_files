@@ -1,5 +1,7 @@
 import datetime
 import time
+
+import click as click
 import requests
 import ichor
 from ichor.api.files_aws_api import FilesAwsApi
@@ -56,10 +58,11 @@ def check_classification(file):
         return "TIME_STAMP"
     elif file == "motors_position_file.txt":
         return "MOTORS_POSITIONS"
-    elif file.startswith("scan_positions"):
-        return "META_DATA"
+    # elif file.startswith("scan_positions"):
+    #     return "META_DATA"
     else:
-        return "META_DATA"
+        # TODO: check other
+        return "TBD4"
 
 
 def upload_file(path_file, file_record):
@@ -96,13 +99,12 @@ def upload_file(path_file, file_record):
                                                                                      upload_id=x['upload_id'],
                                                                                      request_part=i + 1))
             url = res['request_part']['url']
-            print("url: " + str(url))
             res = requests.Request('PUT', url, data=buffer).prepare()
             pretty_print_POST(res)
             res = requests.Session().send(res)
             tags.append(res.headers["ETag"])
             i += 1
-    r = get_ichor_api(FilesAwsApi).files_aws_s3_file_id_multipart_complete_post(file_id=file_record.file_id,
+    get_ichor_api(FilesAwsApi).files_aws_s3_file_id_multipart_complete_post(file_id=file_record.file_id,
                                                                                 s3_multipart_completion_request=S3MultipartCompletionRequest(
                                                                                     tags=tags,
                                                                                     upload_id=upload_id))
@@ -136,23 +138,34 @@ def create_patient(patient_dir_path, data_source):  # C:\Users\user\Desktop\test
                     # TODO: user uploaded
                     user_uploaded = 1
                     created_file = File(file_created_date=oldest,
-                                                                        original_file_path=file_key_name,
-                                                                        classification=classification,
-                                                                        parent_data_instance_id=data_instance.data_instance_id,
-                                                                        file_size=file_size,
-                                                                        user_uploaded=user_uploaded,
-                                                                        )
+                                        original_file_path=file_key_name,
+                                        classification=classification,
+                                        parent_data_instance_id=data_instance.data_instance_id,
+                                        file_size=file_size,
+                                        user_uploaded=user_uploaded)
                     file = get_ichor_api(FilesApi).files_post(file=created_file)
                     # upload file to Amazon aws
                     upload_file(file_path, file)
 
 
-if __name__ == '__main__':
-    path = r"C:\Users\user\Desktop\test_upload_file"
-    load_ichor_configuration()
+@click.group()
+def main():
+    pass
 
+
+@main.command()
+@click.argument('path')
+def upload(path):
+    # path = r"C:\Users\user\Desktop\test_upload_file"
+    load_ichor_configuration()
     for measurement in os.listdir(path):  # iterate over all measurements
         measurement_path = os.path.join(path, measurement)
         for patient_barcode in os.listdir(measurement_path):
             patient_path = os.path.join(measurement_path, patient_barcode)
             create_patient(patient_path, "10k")
+
+
+if __name__ == '__main__':
+    # command for upload from path:
+    # python ./upload_10k_files.py upload "C:\Users\user\Desktop\test_upload_file"
+    main()
