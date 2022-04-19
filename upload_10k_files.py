@@ -1,10 +1,8 @@
 import datetime
 import time
-
 import click as click
 import requests
 import ichor
-from ichor.api.files_aws_api import FilesAwsApi
 from ichor.api.patients_api import PatientsApi
 from ichor.api.data_instances_api import DataInstancesApi
 from ichor.api.files_api import FilesApi
@@ -18,6 +16,10 @@ import io
 import os
 from typing import TypeVar, Callable
 
+# TODO: if uploaded stuck
+# TODO: check if file exist and then upload according of it.
+
+
 T = TypeVar('T')
 _ichor_api_client = None
 _ichor_api_cache = {}
@@ -25,8 +27,8 @@ _ichor_api_cache = {}
 
 def load_ichor_configuration():
     global _ichor_api_client
-    print(os.environ['ICHOR_API_ENDPOINT'])
-    print(os.environ['ICHOR_API_KEY'])
+    print('ICHOR_API_ENDPOINT: ' + os.environ['ICHOR_API_ENDPOINT'])
+    print('ICHOR_API_KEY: ' + os.environ['ICHOR_API_KEY'])
     configuration = ichor.Configuration(host=os.environ['ICHOR_API_ENDPOINT'],
                                         api_key={'ApiKeyAuth': os.environ['ICHOR_API_KEY']})
 
@@ -42,7 +44,16 @@ def get_ichor_api(api: Callable[[], T]) -> T:
 
 def is_patient_exist(patient_barcode):
     patients = get_ichor_api(PatientsApi).patients_get()
-    if patient_barcode in patients:
+    patients_barcode = [patient.external_identifier for patient in patients]
+    if patient_barcode in patients_barcode:
+        return True
+    return False
+
+
+def is_file_exist(file_key):
+    files = get_ichor_api(FilesApi).files_get()
+    files_paths = [file.original_file_path for file in files]
+    if file_key in files_paths:
         return True
     return False
 
@@ -75,7 +86,7 @@ def upload_file(path_file, file_record):
     upload_id = x['upload_id']
     tags = []
 
-    def pretty_print_POST(req):
+    def pretty_print_POST(req, part_number):
         """
         At this point it is completely built and ready
         to be fired; it is "prepared".
@@ -84,12 +95,13 @@ def upload_file(path_file, file_record):
         this function because it is programmed to be pretty
         printed and may differ from the actual request.
         """
-        print('{}\n{}\r\n{}\r\n\r\n'.format(
-            '-----------START-----------',
+        print("upload part: " + str(part_number))
+        print('{}\r\n{}\r\n'.format(
             req.method + ' ' + req.url,
             '\r\n'.join('{}: {}'.format(k, v) for k, v in req.headers.items())
         ))
 
+    print('-----------START-----------')
     with open(path_file, 'rb') as f:
         while i * split < byte_size:
             f.seek(i * split)
@@ -100,15 +112,16 @@ def upload_file(path_file, file_record):
                                                                                      request_part=i + 1))
             url = res['request_part']['url']
             res = requests.Request('PUT', url, data=buffer).prepare()
-            pretty_print_POST(res)
+            pretty_print_POST(res, i + 1)
             res = requests.Session().send(res)
             tags.append(res.headers["ETag"])
             i += 1
     get_ichor_api(FilesAwsApi).files_aws_s3_file_id_multipart_complete_post(file_id=file_record.file_id,
-                                                                                s3_multipart_completion_request=S3MultipartCompletionRequest(
-                                                                                    tags=tags,
-                                                                                    upload_id=upload_id))
+                                                                            s3_multipart_completion_request=S3MultipartCompletionRequest(
+                                                                                tags=tags,
+                                                                                upload_id=upload_id))
     print("finish upload {}!".format(str(file_record.file_id)))
+    print('-----------END-----------', '\r\n\r\n')
 
 
 def create_patient(patient_dir_path, data_source):  # C:\Users\user\Desktop\test_upload_file\mesurement1\barcode-patient
@@ -128,44 +141,46 @@ def create_patient(patient_dir_path, data_source):  # C:\Users\user\Desktop\test
                     file_path = os.path.join(subdir, file_name)
                     # create file in file table.
                     file_key_name = os.path.relpath(os.path.join(subdir, file_name), data_instance_path)
-                    last_modified_date = datetime.datetime.strptime(time.ctime(os.path.getmtime(file_path)),
-                                                                    "%a %b %d %H:%M:%S %Y")
-                    created_date = datetime.datetime.strptime(time.ctime(os.path.getctime(file_path)),
-                                                              "%a %b %d %H:%M:%S %Y")
-                    oldest = min([last_modified_date, created_date])
-                    classification = check_classification(file_name)
-                    file_size = os.path.getsize(file_path)
-                    # TODO: user uploaded
-                    user_uploaded = 1
-                    created_file = File(file_created_date=oldest,
-                                        original_file_path=file_key_name,
-                                        classification=classification,
-                                        parent_data_instance_id=data_instance.data_instance_id,
-                                        file_size=file_size,
-                                        user_uploaded=user_uploaded)
-                    file = get_ichor_api(FilesApi).files_post(file=created_file)
-                    # upload file to Amazon aws
-                    upload_file(file_path, file)
+                    if not is_file_exist(file_key_name):
+                        last_modified_date = datetime.datetime.strptime(time.ctime(os.path.getmtime(file_path)),
+                                                                        "%a %b %d %H:%M:%S %Y")
+                        created_date = datetime.datetime.strptime(time.ctime(os.path.getctime(file_path)),
+                                                                  "%a %b %d %H:%M:%S %Y")
+                        oldest = min([last_modified_date, created_date])
+                        classification = check_classification(file_name)
+                        file_size = os.path.getsize(file_path)
+                        # TODO: user uploaded
+                        user_uploaded = 1
+                        created_file = File(file_created_date=oldest,
+                                            original_file_path=file_key_name,
+                                            classification=classification,
+                                            parent_data_instance_id=data_instance.data_instance_id,
+                                            file_size=file_size,
+                                            user_uploaded=user_uploaded)
+                        file = get_ichor_api(FilesApi).files_post(file=created_file)
+                        # upload file to Amazon aws
+                        upload_file(file_path, file)
+
+#
+# @click.group()
+# def main():
+#     pass
 
 
-@click.group()
-def main():
-    pass
-
-
-@main.command()
-@click.argument('path')
-def upload(path):
-    # path = r"C:\Users\user\Desktop\test_upload_file"
+# @main.command()
+# @click.argument('path')
+# @click.argument('data_source')
+def upload(path, data_source):
     load_ichor_configuration()
     for measurement in os.listdir(path):  # iterate over all measurements
         measurement_path = os.path.join(path, measurement)
         for patient_barcode in os.listdir(measurement_path):
             patient_path = os.path.join(measurement_path, patient_barcode)
-            create_patient(patient_path, "10k")
+            create_patient(patient_path, data_source)
 
 
 if __name__ == '__main__':
     # command for upload from path:
-    # python ./upload_10k_files.py upload "C:\Users\user\Desktop\test_upload_file"
-    main()
+    # python ./upload_10k_files.py upload "C:\Users\user\Desktop\test_upload_file" "10K"
+    # main()
+    upload(r"C:\Users\user\Desktop\test_upload_file", "10K")
