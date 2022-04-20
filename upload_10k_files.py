@@ -18,7 +18,7 @@ from typing import TypeVar, Callable
 
 # TODO: if uploaded stuck
 # TODO: check if file exist and then upload according of it.
-
+# TODO: log for uploaded
 
 T = TypeVar('T')
 _ichor_api_client = None
@@ -29,6 +29,7 @@ def load_ichor_configuration():
     global _ichor_api_client
     print('ICHOR_API_ENDPOINT: ' + os.environ['ICHOR_API_ENDPOINT'])
     print('ICHOR_API_KEY: ' + os.environ['ICHOR_API_KEY'])
+    print()
     configuration = ichor.Configuration(host=os.environ['ICHOR_API_ENDPOINT'],
                                         api_key={'ApiKeyAuth': os.environ['ICHOR_API_KEY']})
 
@@ -122,42 +123,54 @@ def upload_file(path_file, file_record):
     print('-----------END-----------', '\r\n\r\n')
 
 
-def create_patient(patient_dir_path, data_source):  # C:\Users\user\Desktop\test_upload_file\mesurement1\barcode-patient
+def write_log(log_path, file_name):
+    f = open(log_path, "a")
+    f.write(file_name + "\r\n")
+    f.close()
+
+
+def create_file(subdir, file_name, data_instance_path, data_instance, log_path):
+    file_path = os.path.join(subdir, file_name)
+    # create file in file table.
+    file_key_name = os.path.relpath(os.path.join(subdir, file_name), data_instance_path)
+    if not is_file_exist(file_key_name):
+        last_modified_date = datetime.datetime.strptime(time.ctime(os.path.getmtime(file_path)),
+                                                        "%a %b %d %H:%M:%S %Y")
+        created_date = datetime.datetime.strptime(time.ctime(os.path.getctime(file_path)),
+                                                  "%a %b %d %H:%M:%S %Y")
+        oldest = min([last_modified_date, created_date])
+        classification = check_classification(file_name)
+        file_size = os.path.getsize(file_path)
+        # TODO: user uploaded
+        user_uploaded = 1
+        created_file = File(file_created_date=oldest,
+                            original_file_path=file_key_name,
+                            classification=classification,
+                            parent_data_instance_id=data_instance.data_instance_id,
+                            file_size=file_size,
+                            user_uploaded=user_uploaded)
+        # upload file to file table
+        file = get_ichor_api(FilesApi).files_post(file=created_file)
+        # upload file to Amazon aws
+        upload_file(file_path, file)
+        write_log(log_path, file_path)
+
+
+def create_patient(patient_dir_path, data_source, log_path):  # C:\Users\user\Desktop\test_upload_file\mesurement1\barcode-patient
     patient_barcode = os.path.basename(patient_dir_path)
     if not is_patient_exist(patient_barcode):
         patient = get_ichor_api(PatientsApi).patients_post(patient=Patient(external_identifier=patient_barcode))
         for data_instance_dir in os.listdir(patient_dir_path):
             data_instance = get_ichor_api(DataInstancesApi).data_instances_post(
                 data_instance=DataInstance(patient_id=patient.patient_id, data_source=data_source,
-                                           type=data_instance_dir.split('_', 1)[0].upper()))
+                                           type=''.join([i for i in data_instance_dir.split('_', 1)[0].upper() if not i.isdigit()])))
             data_instance_path = os.path.join(patient_dir_path, data_instance_dir)
             for subdir, dirs, files in os.walk(data_instance_path):
                 for file_name in files:
                     if file_name == "configuration.txt" and os.path.basename(
                             subdir) == "PreSequence":  # dont upload configuration file in PreSequnce
                         continue
-                    file_path = os.path.join(subdir, file_name)
-                    # create file in file table.
-                    file_key_name = os.path.relpath(os.path.join(subdir, file_name), data_instance_path)
-                    if not is_file_exist(file_key_name):
-                        last_modified_date = datetime.datetime.strptime(time.ctime(os.path.getmtime(file_path)),
-                                                                        "%a %b %d %H:%M:%S %Y")
-                        created_date = datetime.datetime.strptime(time.ctime(os.path.getctime(file_path)),
-                                                                  "%a %b %d %H:%M:%S %Y")
-                        oldest = min([last_modified_date, created_date])
-                        classification = check_classification(file_name)
-                        file_size = os.path.getsize(file_path)
-                        # TODO: user uploaded
-                        user_uploaded = 1
-                        created_file = File(file_created_date=oldest,
-                                            original_file_path=file_key_name,
-                                            classification=classification,
-                                            parent_data_instance_id=data_instance.data_instance_id,
-                                            file_size=file_size,
-                                            user_uploaded=user_uploaded)
-                        file = get_ichor_api(FilesApi).files_post(file=created_file)
-                        # upload file to Amazon aws
-                        upload_file(file_path, file)
+                    create_file(subdir, file_name, data_instance_path, data_instance, log_path)
 
 #
 # @click.group()
@@ -168,13 +181,13 @@ def create_patient(patient_dir_path, data_source):  # C:\Users\user\Desktop\test
 # @main.command()
 # @click.argument('path')
 # @click.argument('data_source')
-def upload(path, data_source):
+def upload(path, data_source, destination_path=r"C:\Users\user\Desktop\log.txt"):
     load_ichor_configuration()
     for measurement in os.listdir(path):  # iterate over all measurements
         measurement_path = os.path.join(path, measurement)
         for patient_barcode in os.listdir(measurement_path):
             patient_path = os.path.join(measurement_path, patient_barcode)
-            create_patient(patient_path, data_source)
+            create_patient(patient_path, data_source, destination_path)
 
 
 if __name__ == '__main__':
