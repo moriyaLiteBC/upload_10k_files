@@ -112,8 +112,7 @@ def check_classification(file):
     elif file == "motors_position_file.txt":
         return "MOTORS_POSITIONS"
     else:
-        # TODO: check other
-        return "TBD4"
+        return "OTHER"
 
 
 def upload_file(path_file, file_record):
