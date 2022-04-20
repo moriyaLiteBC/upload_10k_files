@@ -63,14 +63,12 @@ def check_classification(file):
         return "WIDE_IMAGE"
     elif file == "configuration.txt":
         return "CONFIGURATION_FILE"
-    elif file.startswith("Line"):
+    elif file.startswith("LineCam"):
         return "LINE_IMAGE"
     elif file.endswith("timestamp.txt"):
         return "TIME_STAMP"
     elif file == "motors_position_file.txt":
         return "MOTORS_POSITIONS"
-    # elif file.startswith("scan_positions"):
-    #     return "META_DATA"
     else:
         # TODO: check other
         return "TBD4"
