@@ -49,6 +49,7 @@ def is_patient_exist(patient_barcode):
 
 
 def is_file_exist(file_path, log_path):
+    ## check file by log.txt
     try:
         log_file = open(log_path, 'r')
     except Exception:
@@ -79,7 +80,8 @@ def is_record_but_not_in_s3(file_path):
     for file in files:
         if file_path == file.original_file_path:
             if not is_record_in_s3(file):
-                print("record in table but not in s3!\nfile ID: {}\nfile path: {}\n".format(file.file_id, file.original_file_path))
+                print("record in table but not in s3!\nfile ID: {}\nfile path: {}\n".format(file.file_id,
+                                                                                            file.original_file_path))
                 return file
     return None
 
@@ -185,7 +187,8 @@ def get_lines_count_in_file(file_path):
         return 0
 
 
-def create_patient(patient_dir_path, data_source, log_path):  # C:\Users\user\Desktop\test_upload_file\mesurement1\barcode-patient
+def create_patient(patient_dir_path, data_source,
+                   log_path):  # C:\Users\user\Desktop\test_upload_file\mesurement1\barcode-patient
     patient_barcode = os.path.basename(patient_dir_path)
     patient = is_patient_exist(patient_barcode)
     if patient is None:
@@ -197,7 +200,8 @@ def create_patient(patient_dir_path, data_source, log_path):  # C:\Users\user\De
             data_instance = get_ichor_api(DataInstancesApi).data_instances_post(
                 data_instance=DataInstance(patient_id=patient.patient_id, data_source=data_source,
                                            type=''.join(
-                                               [i for i in data_instance_dir.split('_', 1)[0].upper() if not i.isdigit()])))
+                                               [i for i in data_instance_dir.split('_', 1)[0].upper() if
+                                                not i.isdigit()])))
 
         for subdir, dirs, files in os.walk(data_instance_path):
             for file_name in files:
@@ -216,15 +220,13 @@ def create_patient(patient_dir_path, data_source, log_path):  # C:\Users\user\De
                     oldest = min([last_modified_date, created_date])
                     classification = check_classification(file_name)
                     file_size = os.path.getsize(file_path)
-                    # TODO: user uploaded
-                    user_uploaded = 1
                     created_file = File(file_created_date=oldest,
                                         original_file_path=file_key_name,
                                         classification=classification,
                                         parent_data_instance_id=data_instance.data_instance_id,
                                         file_size=file_size,
-                                        file_bytes_uploaded=0,
-                                        user_uploaded=user_uploaded)
+                                        file_bytes_uploaded=0)
+                    # try care edge case of file that crash in upload to S3, so it insert to file table but
                     file = is_record_but_not_in_s3(file_path)
                     if file is None:
                         # upload file to file table
@@ -234,9 +236,13 @@ def create_patient(patient_dir_path, data_source, log_path):  # C:\Users\user\De
                     upload_file(file_path, file)
                     write_log(log_path, file_path, file.file_id)
                 else:
-                    data_instance = get_ichor_api(DataInstancesApi).data_instances_data_instance_id_get(int(file.parent_data_instance_id))
+                    data_instance = get_ichor_api(DataInstancesApi).data_instances_data_instance_id_get(
+                        int(file.parent_data_instance_id))
                     patient = get_ichor_api(PatientsApi).patients_patient_id_get(data_instance.patient_id)
-                    print("try upload file ID: {}, but its uploaded yet.\n in path: {}\{}\n".format(file.file_id, patient.external_identifier, file.original_file_path))
+                    print("try upload file ID: {}, but its uploaded yet.\n in path: {}\{}\n".format(file.file_id,
+                                                                                                    patient.external_identifier,
+                                                                                                    file.original_file_path))
+
 
 @click.group()
 def main():
@@ -245,9 +251,9 @@ def main():
 
 @main.command()
 @click.argument('path')
-@click.argument('data_source')
-@click.argument('destination_path')
-def upload(path, data_source, destination_path=r"C:\Users\user\Desktop\log.txt"):
+@click.option('--data_source', default="10k", help='test location')
+@click.option('--destination_path', default=r"C:\Users\user\Desktop\log.txt", help='destination log file')
+def upload(path, data_source, destination_path):
     global log_num_lines
     log_num_lines = get_lines_count_in_file(destination_path)
     load_ichor_configuration()
@@ -272,8 +278,9 @@ def print_done():
     print("    \               / ")
     print("     \_____________/ ")
 
+
 if __name__ == '__main__':
     # command for upload from path:
-    # python ./upload_10k_files.py upload "C:\Users\user\Desktop\test_upload_file" "10K"
+    # python ./upload_10k_files.py upload "C:\Users\user\Desktop\test_upload_file"
     main()
     # upload(r"C:\Users\user\Desktop\test_upload_file", "10K")
