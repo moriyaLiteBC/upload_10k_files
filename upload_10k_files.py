@@ -22,6 +22,7 @@ DATA_INSTANCE_PKL_FILE = 'data_instance.pkl'
 FILE_PKL_FILE = 'file.pkl'
 patient_uploaded = []
 file_uploaded = {}
+files_record = {}
 T = TypeVar('T')
 _ichor_api_client = None
 _ichor_api_cache = {}
@@ -69,6 +70,28 @@ def load_from_patient_pickle():
         return []
 
 
+def pickle_file(file_path, file_id):
+    with open(FILE_PKL_FILE, 'ab') as pkl:
+        dic = {file_path: file_id}
+        pickle.dump(dic, pkl)
+
+
+def load_from_file_pickle():
+    try:
+        with open(FILE_PKL_FILE, 'rb') as pkl:
+            objs = {}
+            while 1:
+                try:
+                    dict = pickle.load(pkl)
+                    for key, value in dict.items():
+                        objs[key] = value
+                except EOFError:
+                    break
+            return objs
+    except Exception:
+        return []
+
+
 def is_patient_exist(patient_barcode):
     for patient_record in patient_uploaded:
         if patient_barcode in patient_record:
@@ -77,7 +100,7 @@ def is_patient_exist(patient_barcode):
     return None
 
 
-def is_file_exist(file_path):
+def is_file_uploaded(file_path):
     if file_path in file_uploaded:
         file_id = file_uploaded[file_path]
         file = get_ichor_api(FilesApi).files_file_id_get(file_id)
@@ -93,13 +116,12 @@ def is_record_in_s3(file):
 
 
 def is_record_but_not_in_s3(file_path):
-    files = get_ichor_api(FilesApi).files_get()
-    for file in files:
-        if file_path == file.original_file_path:
-            if not is_record_in_s3(file):
-                print("record in table but not in s3!\nfile ID: {}\nfile path: {}\n".format(file.file_id,
-                                                                                            file.original_file_path))
-                return file
+    if file_path in files_record:
+        file_id = files_record[file_path]
+        file = get_ichor_api(FilesApi).files_file_id_get(file_id)
+        print("record in table but not in s3!\nfile ID: {}\nfile path: {}\n".format(file.file_id,
+                                                                                    file.original_file_path))
+        return file
     return None
 
 
@@ -260,8 +282,8 @@ def create_file_and_upload(scans_and_find_planes_path, file_path, data_instance)
     # create file in file table.
     file_key_name = os.path.relpath(file_path, scans_and_find_planes_path).replace(
         "\\", "/")
-    file = is_file_exist(file_path)
-    if file is None:
+    file = is_file_uploaded(file_path)
+    if file is None:   # not in log file
         file = is_record_but_not_in_s3(file_path)
         if file is None:  # there is record but not in s3
             last_modified_date = datetime.datetime.strptime(time.ctime(os.path.getmtime(file_path)),
@@ -279,8 +301,10 @@ def create_file_and_upload(scans_and_find_planes_path, file_path, data_instance)
                                 file_bytes_uploaded=0)
             # try care edge case of file that crash in upload to S3, so it insert to file table but
             # upload file to file table
+
             file = get_ichor_api(FilesApi).files_post(file=created_file)
             get_ichor_api(FilesApi).files_file_id_put(file.file_id, File(original_file_path=file_path))
+            pickle_file(file_path, file.file_id)
         # upload file to Amazon aws
         upload_file(file_path, file)
         write_log(file_path, file.file_id)
@@ -388,10 +412,12 @@ def upload(path, data_source, destination_path):
     global patient_uploaded
     global log_path
     global file_uploaded
+    global files_record
 
     log_path = destination_path
     patient_uploaded = load_from_patient_pickle()
     file_uploaded = load_files_from_log()
+    files_record = load_from_file_pickle()
     log_num_lines = get_lines_count_in_file(destination_path)
     load_ichor_configuration()
     for measurement in os.listdir(path):  # iterate over all measurements
