@@ -17,16 +17,18 @@ import os
 from typing import TypeVar, Callable
 import pickle
 
-PATIENT_PKL_FILE = 'patient.pkl'
-DATA_INSTANCE_PKL_FILE = 'data_instance.pkl'
-FILE_PKL_FILE = 'file.pkl'
-patient_uploaded = []
+PATIENT_PKL_FILE = 'patient.pkl' # pickle for patients in database.
+FILE_PKL_FILE = 'file.pkl'  # pickle for files in database
+# key: barcode, value: id
+patient_uploaded = {}
+# key: path , value: id
 file_uploaded = {}
+# key: path , value: id
 files_record = {}
+
 T = TypeVar('T')
 _ichor_api_client = None
 _ichor_api_cache = {}
-log_num_lines = 0
 log_path = "log.txt"
 
 
@@ -51,52 +53,53 @@ def get_ichor_api(api: Callable[[], T]) -> T:
 
 
 def pickle_patient(patient_barcode, patient_id):
+    patient_uploaded[patient_barcode] = patient_id
     with open(PATIENT_PKL_FILE, 'ab') as pkl:
         dic = {patient_barcode: patient_id}
         pickle.dump(dic, pkl)
 
 
-def load_from_patient_pickle():
+def unpickle_and_store_patients():
+    global patient_uploaded
     try:
         with open(PATIENT_PKL_FILE, 'rb') as pkl:
-            objs = []
             while 1:
                 try:
-                    objs.append(pickle.load(pkl))
+                    dict = pickle.load(pkl)
+                    for key, value in dict.items():
+                        patient_uploaded[key] = value
                 except EOFError:
                     break
-            return objs
     except Exception:
         return []
 
 
-def pickle_file(file_path, file_id):
+def pickle_record_file(file_path, file_id):
+    files_record[file_path] = file_id
     with open(FILE_PKL_FILE, 'ab') as pkl:
         dic = {file_path: file_id}
         pickle.dump(dic, pkl)
 
 
-def load_from_file_pickle():
+def unpickle_and_store_files_record():
+    global files_record
     try:
         with open(FILE_PKL_FILE, 'rb') as pkl:
-            objs = {}
             while 1:
                 try:
                     dict = pickle.load(pkl)
                     for key, value in dict.items():
-                        objs[key] = value
+                        files_record[key] = value
                 except EOFError:
                     break
-            return objs
     except Exception:
-        return []
+        return {}
 
 
 def is_patient_exist(patient_barcode):
-    for patient_record in patient_uploaded:
-        if patient_barcode in patient_record:
-            patient = get_ichor_api(PatientsApi).patients_patient_id_get(patient_record[patient_barcode])
-            return patient
+    if patient_barcode in patient_uploaded:
+        patient = get_ichor_api(PatientsApi).patients_patient_id_get(patient_uploaded[patient_barcode])
+        return patient
     return None
 
 
@@ -105,18 +108,12 @@ def is_file_uploaded(file_path):
         file_id = file_uploaded[file_path]
         file = get_ichor_api(FilesApi).files_file_id_get(file_id)
         return file
-
     return None
 
 
-def is_record_in_s3(file):
-    if file.original_file_path in file_uploaded:
-        return True
-    return False
-
-
 def is_record_but_not_in_s3(file_path):
-    if file_path in files_record:
+    """check if file in database but not in s3"""
+    if file_path in files_record and file_path not in file_uploaded:
         file_id = files_record[file_path]
         file = get_ichor_api(FilesApi).files_file_id_get(file_id)
         print("record in table but not in s3!\nfile ID: {}\nfile path: {}\n".format(file.file_id,
@@ -151,6 +148,7 @@ def check_classification(file):
 
 
 def upload_file(path_file, file_record):
+    """upload file to amazon (without create record)"""
     x = get_ichor_api(FilesAwsApi).files_aws_file_id_multipart_post(file_id=file_record.file_id,
                                                                     storage_multipart_request=StorageMultipartRequest())
 
@@ -198,35 +196,29 @@ def upload_file(path_file, file_record):
     print('-----------END-----------', '\r\n\r\n')
 
 
-def write_log(file_path, file_id):
+def append_to_log(file_path, file_id):
     f = open(log_path, "a")
     f.write(file_path + "," + str(file_id) + "\r")
     f.close()
 
 
 def load_files_from_log():
-    log_dict = {}
+    global file_uploaded
     try:
         log_file = open(log_path, 'r')
         for line in log_file.readlines():
             splits = line.split(',')
-            log_dict[splits[0]] = int(splits[1])
-        return log_dict
+            file_uploaded[splits[0]] = int(splits[1])
     except Exception:
-        return {}
-
-
-def get_lines_count_in_file(file_path):
-    try:
-        with open(file_path, 'r') as fp:
-            for count, line in enumerate(fp):
-                pass
-        return count
-    except Exception:
-        return 0
+        return
 
 
 def get_free_form_data_of_movie(movie_name, up_path):
+    def extract_x_y_z(dir_name):
+        import re
+        result = re.findall(r'\d+', dir_name)
+        return result[0], result[1], result[2]
+
     x, y, z = extract_x_y_z(movie_name)
     file_path = os.path.join(up_path, "Scan_{}_{}_{}.tif".format(x, y, z))
     file_id = file_uploaded[file_path]
@@ -236,6 +228,7 @@ def get_free_form_data_of_movie(movie_name, up_path):
 
 def create_appropriate_data_instance(scans_and_find_planes_dir, scans_and_find_planes_path, patient,
                                      data_source):
+    """create (in database) data_instance  all files - and upload"""
     if scans_and_find_planes_dir.startswith("FindPlane"):
         data_instance = is_data_instance_exist_from_uploaded_file(scans_and_find_planes_path)
         if data_instance is None:
@@ -271,13 +264,8 @@ def create_appropriate_data_instance(scans_and_find_planes_dir, scans_and_find_p
                 create_files(movie_path, data_instance)
 
 
-def extract_x_y_z(dir_name):
-    import re
-    result = re.findall(r'\d+', dir_name)
-    return result[0], result[1], result[2]
-
-
 def create_file_and_upload(scans_and_find_planes_path, file_path, data_instance):
+    """create (in database) file and upload"""
     global file_uploaded
     # create file in file table.
     file_key_name = os.path.relpath(file_path, scans_and_find_planes_path).replace(
@@ -304,10 +292,10 @@ def create_file_and_upload(scans_and_find_planes_path, file_path, data_instance)
 
             file = get_ichor_api(FilesApi).files_post(file=created_file)
             get_ichor_api(FilesApi).files_file_id_put(file.file_id, File(original_file_path=file_path))
-            pickle_file(file_path, file.file_id)
+            pickle_record_file(file_path, file.file_id)
         # upload file to Amazon aws
         upload_file(file_path, file)
-        write_log(file_path, file.file_id)
+        append_to_log(file_path, file.file_id)
         file_uploaded[file_path] = file.file_id
     else:
         # record and in s3
@@ -320,6 +308,7 @@ def create_file_and_upload(scans_and_find_planes_path, file_path, data_instance)
 
 
 def create_files(scans_and_find_planes_path, data_instance, reqursive=True):
+    """create (in database) and upload files of data instance"""
     if reqursive:
         for subdir, dirs, files in os.walk(scans_and_find_planes_path):
             for file_name in files:
@@ -338,6 +327,7 @@ def create_files(scans_and_find_planes_path, data_instance, reqursive=True):
 
 
 def create_patient(patient_dir_path, data_source):
+    """create (in database) patient and all data instance and all files - and upload"""
     patient_barcode = os.path.basename(patient_dir_path)
     patient = is_patient_exist(patient_barcode)
     if patient is None:
@@ -408,17 +398,9 @@ def main():
 @click.option('--data_source', default="10k", help='test location')
 @click.option('--destination_path', default="log.txt", help='destination log file')
 def upload(path, data_source, destination_path):
-    global log_num_lines
-    global patient_uploaded
-    global log_path
-    global file_uploaded
-    global files_record
-
-    log_path = destination_path
-    patient_uploaded = load_from_patient_pickle()
-    file_uploaded = load_files_from_log()
-    files_record = load_from_file_pickle()
-    log_num_lines = get_lines_count_in_file(destination_path)
+    unpickle_and_store_patients()
+    load_files_from_log()
+    unpickle_and_store_files_record()
     load_ichor_configuration()
     for measurement in os.listdir(path):  # iterate over all measurements
         measurement_path = os.path.join(path, measurement)
