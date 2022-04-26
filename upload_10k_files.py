@@ -122,8 +122,8 @@ def is_record_but_not_in_s3(file_path):
     return None
 
 
-def is_data_instance_exist_from_uploaded_file(data_instance_path):
-    result = [int(v) for k, v in file_uploaded.items() if k.startswith(data_instance_path)]
+def is_data_instance_exist(data_instance_path):
+    result = [int(v) for k, v in files_record.items() if k.startswith(data_instance_path)]
     if not result:
         return None
     file = get_ichor_api(FilesApi).files_file_id_get(result[0])
@@ -230,14 +230,14 @@ def create_appropriate_data_instance(scans_and_find_planes_dir, scans_and_find_p
                                      data_source):
     """create (in database) data_instance  all files - and upload"""
     if scans_and_find_planes_dir.startswith("FindPlane"):
-        data_instance = is_data_instance_exist_from_uploaded_file(scans_and_find_planes_path)
+        data_instance = is_data_instance_exist(scans_and_find_planes_path)
         if data_instance is None:
             data_instance = get_ichor_api(DataInstancesApi).data_instances_post(
                 data_instance=DataInstance(patient_id=patient.patient_id, data_source=data_source,
                                            type="find_z_plane"))
         create_files(scans_and_find_planes_path, data_instance)
     elif scans_and_find_planes_dir.startswith("scan"):
-        data_instance = is_data_instance_exist_from_uploaded_file(scans_and_find_planes_path)
+        data_instance = is_data_instance_exist(scans_and_find_planes_path)
         if data_instance is None:
             data_instance = get_ichor_api(DataInstancesApi).data_instances_post(
                 data_instance=DataInstance(patient_id=patient.patient_id, data_source=data_source,
@@ -249,14 +249,14 @@ def create_appropriate_data_instance(scans_and_find_planes_dir, scans_and_find_p
                 continue
             free_form_data = get_free_form_data_of_movie(movie, scans_and_find_planes_path)
             if not os.path.isfile(os.path.join(movie_path, "LineCam0.tif")):
-                data_instance = is_data_instance_exist_from_uploaded_file(scans_and_find_planes_path)
+                data_instance = is_data_instance_exist(movie_path)
                 if data_instance is None:
                     data_instance = get_ichor_api(DataInstancesApi).data_instances_post(
                         data_instance=DataInstance(patient_id=patient.patient_id, data_source=data_source,
                                                    type="wide_only_capture", free_form_data=free_form_data))
                 create_files(movie_path, data_instance)
             else:
-                data_instance = is_data_instance_exist_from_uploaded_file(scans_and_find_planes_path)
+                data_instance = is_data_instance_exist(movie_path)
                 if data_instance is None:
                     data_instance = get_ichor_api(DataInstancesApi).data_instances_post(
                         data_instance=DataInstance(patient_id=patient.patient_id, data_source=data_source,
