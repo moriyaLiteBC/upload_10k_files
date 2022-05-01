@@ -17,7 +17,7 @@ import os
 from typing import TypeVar, Callable
 import pickle
 
-PATIENT_PKL_FILE = 'patient.pkl' # pickle for patients in database.
+PATIENT_PKL_FILE = 'patient.pkl'  # pickle for patients in database.
 FILE_PKL_FILE = 'file.pkl'  # pickle for files in database
 # key: barcode, value: id
 patient_uploaded = {}
@@ -40,7 +40,7 @@ def load_ichor_configuration():
     # configuration = ichor.Configuration(host=os.environ['ICHOR_API_ENDPOINT'],
     #                                     api_key={'ApiKeyAuth': os.environ['ICHOR_API_KEY']})
     configuration = ichor.Configuration(host="http://172.16.0.111:1234",
-                                        api_key={'ApiKeyAuth': "XOKAexeM9L/5JYt1u0gf0A=="})
+                                        api_key={'ApiKeyAuth': "S2edwqLGYFRflfEcyq9MRg=="})
 
     _ichor_api_client = ichor.ApiClient(configuration)
     _ichor_api_client.__enter__()
@@ -198,7 +198,7 @@ def upload_file(path_file, file_record):
 
 def append_to_log(file_path, file_id):
     f = open(log_path, "a")
-    f.write(file_path + "," + str(file_id) + "\r")
+    f.write(file_path + "," + str(file_id) + "," +str(datetime.datetime.now()) + "\r")
     f.close()
 
 
@@ -271,7 +271,7 @@ def create_file_and_upload(scans_and_find_planes_path, file_path, data_instance)
     file_key_name = os.path.relpath(file_path, scans_and_find_planes_path).replace(
         "\\", "/")
     file = is_file_uploaded(file_path)
-    if file is None:   # not in log file
+    if file is None:  # not in log file
         file = is_record_but_not_in_s3(file_path)
         if file is None:  # there is record but not in s3
             last_modified_date = datetime.datetime.strptime(time.ctime(os.path.getmtime(file_path)),
@@ -303,8 +303,8 @@ def create_file_and_upload(scans_and_find_planes_path, file_path, data_instance)
             int(file.parent_data_instance_id))
         patient = get_ichor_api(PatientsApi).patients_patient_id_get(data_instance.patient_id)
         print("try upload file ID: {}, but its uploaded yet.\n in path: {}\{}\n".format(file.file_id,
-                                                                                            patient.external_identifier,
-                                                                                            file.original_file_path))
+                                                                                        patient.external_identifier,
+                                                                                        file.original_file_path))
 
 
 def create_files(scans_and_find_planes_path, data_instance, reqursive=True):
@@ -338,54 +338,6 @@ def create_patient(patient_dir_path, data_source):
 
         create_appropriate_data_instance(scans_and_find_planes_dir, scans_and_find_planes_path, patient,
                                          data_source)
-
-        # data_instance = is_data_instance_exist(scans_and_find_planes_path)
-        # if data_instance is None:
-        #     data_instance = get_ichor_api(DataInstancesApi).data_instances_post(
-        #         data_instance=DataInstance(patient_id=patient.patient_id, data_source=data_source,
-        #                                    type=''.join(
-        #                                        [i for i in scans_and_find_planes_dir.split('_', 1)[0].upper() if
-        #                                         not i.isdigit()])))
-        #
-        # for subdir, dirs, files in os.walk(scans_and_find_planes_path):
-        #     for file_name in files:
-        #         if file_name == "configuration.txt" and os.path.basename(
-        #                 subdir) == "PreSequence":  # dont upload configuration file in PreSequnce
-        #             continue
-        #         file_path = os.path.join(subdir, file_name)
-        #         # create file in file table.
-        #         file_key_name = os.path.relpath(os.path.join(subdir, file_name), scans_and_find_planes_path).replace("\\", "/")
-        #         file = is_file_exist(file_path)
-        #         if file is None:
-        #             last_modified_date = datetime.datetime.strptime(time.ctime(os.path.getmtime(file_path)),
-        #                                                             "%a %b %d %H:%M:%S %Y")
-        #             created_date = datetime.datetime.strptime(time.ctime(os.path.getctime(file_path)),
-        #                                                       "%a %b %d %H:%M:%S %Y")
-        #             oldest = min([last_modified_date, created_date])
-        #             classification = check_classification(file_name)
-        #             file_size = os.path.getsize(file_path)
-        #             created_file = File(file_created_date=oldest,
-        #                                 original_file_path=file_key_name,
-        #                                 classification=classification,
-        #                                 parent_data_instance_id=data_instance.data_instance_id,
-        #                                 file_size=file_size,
-        #                                 file_bytes_uploaded=0)
-        #             # try care edge case of file that crash in upload to S3, so it insert to file table but
-        #             file = is_record_but_not_in_s3(file_path)
-        #             if file is None:
-        #                 # upload file to file table
-        #                 file = get_ichor_api(FilesApi).files_post(file=created_file)
-        #                 get_ichor_api(FilesApi).files_file_id_put(file.file_id, File(original_file_path=file_path))
-        #             # upload file to Amazon aws
-        #             upload_file(file_path, file)
-        #             write_log(file_path, file.file_id)
-        #         else:
-        #             data_instance = get_ichor_api(DataInstancesApi).data_instances_data_instance_id_get(
-        #                 int(file.parent_data_instance_id))
-        #             patient = get_ichor_api(PatientsApi).patients_patient_id_get(data_instance.patient_id)
-        #             print("try upload file ID: {}, but its uploaded yet.\n in path: {}\{}\n".format(file.file_id,
-        #                                                                                             patient.external_identifier,
-        #                                                                                             file.original_file_path))
 
 
 @click.group()
@@ -428,4 +380,14 @@ if __name__ == '__main__':
     # command for upload from path:
     # python ./upload_10k_files.py upload "C:\Users\user\Desktop\test_upload_file"
     main()
-    # upload(r"C:\Users\user\Desktop\test_upload_file", "10K")
+
+    # configuration = ichor.Configuration(host=os.environ['ICHOR_API_ENDPOINT'],
+    #                                     api_key={'ApiKeyAuth': os.environ['ICHOR_API_KEY']})
+    #
+    #
+    # _ichor_api_client = ichor.ApiClient(configuration)
+    # _ichor_api_client.__enter__()
+    # files = get_ichor_api(FilesApi).files_get()
+    # patients = get_ichor_api(PatientsApi).patients_get()
+    #
+    # x=5
