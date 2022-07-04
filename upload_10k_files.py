@@ -51,7 +51,6 @@ AVOID_WORK_HOURS = False
 MAX_WORKERS_UPLOAD = 64
 MAX_WORKERS_PARENT = +64
 
-
 def load_ichor_configuration():
     global _ichor_api_client
 
@@ -175,14 +174,16 @@ def check_classification(file):
         return "WIDE_VIDEO", None
     elif file == "configuration.txt":
         return "CONFIGURATION_FILE", None
-    elif file.startswith("LineCam"):
-        return "LINE_IMAGE", None
+    elif re.search("^LineCam\d+\.tif$", file):
+        return "LINE_IMAGE", get_num()
     elif file == "wide_cam_timestamp.txt":
         return "WIDE_TIMESTAMP", None
     elif re.search("^Line_\d+\.tif$", file) or file == "LineScan_0.tif":
-        return "PRE_LINE", get_num()
+        return "PRE_LINE", None
     elif re.search("^FastScan_\d+\.tif$", file):
         return "FOCUS_WIDE", get_num()
+    elif file == "line_cap.txt":
+        return "PRE_LINE_RESULTS", None
     elif file == "best_image.tif":
         return "FOCUS_IMAGE_RESULT", None
     else:
@@ -289,6 +290,12 @@ def load_files_from_log():
     except Exception:
         return
 
+def extract_z_x_ya(movie_dir_name):
+    z,x,y = extract_z_x_y(movie_dir_name)
+    a = movie_dir_name[-1]
+    return [z, x, y, a]
+
+
 
 def create_appropriate_recording(scans_and_find_planes_dir, scans_and_find_planes_path, patient,
                                  data_source):
@@ -315,7 +322,7 @@ def create_appropriate_recording(scans_and_find_planes_dir, scans_and_find_plane
             recording = get_ichor_api(RecordingsApi).recordings_post(
                 Recording(patient_id=patient.patient_id, data_source=data_source,
                           type="cap_plane_scan", date_created=creation_date))
-        create_files(scans_and_find_planes_path, recording, is_cap_plane=True)
+        files_to_link = create_files(scans_and_find_planes_path, recording, is_cap_plane=True)
         try:
             get_ichor_api(RecordingVariablesApi).recordings_variables_post(RecordingVariable(
                                                                        variable_name="scan_number",
@@ -333,6 +340,32 @@ def create_appropriate_recording(scans_and_find_planes_dir, scans_and_find_plane
                 recording = get_ichor_api(RecordingsApi).recordings_post(
                     Recording(patient_id=patient.patient_id, data_source=data_source,
                               type="full_capture", date_created=creation_date))
+            z_x_ya= extract_z_x_ya(movie)
+            try:
+                get_ichor_api(RecordingVariablesApi).recordings_variables_post(RecordingVariable(
+                    variable_name="position_index",
+                    recording_id=recording.recording_id,
+                    json_value=z_x_ya))
+            except:
+                print("variable position_index for {} recording exist already".format(recording.recording_id))
+            try:
+                get_ichor_api(RecordingVariablesApi).recordings_variables_post(RecordingVariable(
+                    variable_name="scan_number",
+                    recording_id=recording.recording_id,
+                    float_value=float(re.findall('\d+', scans_and_find_planes_dir)[0])))
+            except:
+                print("variable scan_number for {} recording exist already".format(recording.recording_id))
+            z, x, y = extract_z_x_y(movie)
+            file_to_link_name = 'Scan_{}_{}_{}.tif'.format(z, x, y)
+            file_id = files_to_link.get(file_to_link_name)
+            while file_id is None:
+                time.sleep(1)
+                print("wait for " + file_to_link_name + " in recording: " + scans_and_find_planes_dir)
+                file_id = files_to_link.get(file_to_link_name)
+            get_ichor_api(RecordingVariablesApi).recordings_variables_post(RecordingVariable(
+                variable_name="link_to_scan",
+                recording_id=recording.recording_id,
+                file_value=file_id))
             create_files(movie_path, recording)
 
             # continue
@@ -353,7 +386,7 @@ def get_md5(file_path):
         return file_hash.hexdigest()
 
 
-def create_file_and_upload(scans_and_find_planes_path, file_path, recording, counter_seq=None):
+def create_file_and_upload(scans_and_find_planes_path, file_path, recording, counter_seq=None, files_to_link=None):
     """create (in database) file and upload"""
     global file_uploaded
     # create file in file table.
@@ -385,6 +418,8 @@ def create_file_and_upload(scans_and_find_planes_path, file_path, recording, cou
             # upload file to file table
             file = get_ichor_api(FilesApi).files_post(file=created_file)
             get_ichor_api(FilesApi).files_file_id_patch(file.file_id, {"original_file_path": file_path})
+            if files_to_link is not None:
+                files_to_link[os.path.basename(file_path)] = file.file_id
             pickle_record_file(file_path, file.file_id)
         # upload file to Amazon aws
         i = 0
@@ -407,13 +442,13 @@ def create_file_and_upload(scans_and_find_planes_path, file_path, recording, cou
 semaphor = threading.Semaphore(512)
 
 
-def create_file_and_upload_wrapper(scans_and_find_planes_path, file_path, recording, counter_seq=None):
+def create_file_and_upload_wrapper(scans_and_find_planes_path, file_path, recording, counter_seq=None, files_to_link=None):
     # if not file_path.endswith(".avi"):
     #    return
 
     def t():
         try:
-            create_file_and_upload(scans_and_find_planes_path, file_path, recording, counter_seq)
+            create_file_and_upload(scans_and_find_planes_path, file_path, recording, counter_seq, files_to_link=files_to_link)
         except Exception as e:
             print(traceback.format_exc())
             exit()
@@ -436,21 +471,113 @@ def extract_float_z_x_y(line):
 
 def create_files(scans_and_find_planes_path, recording, is_cap_plane=False):
     """create (in database) and upload files of data instance"""
-    file_dont_upload = ["cap_plane.txt", "midway.tif", "fullway.tif", "angle.txt", "binary_image.jpg", "debug1.tif", "debug2.tif", "image_ang.jpg", "fast_scan.txt"]
+    file_dont_upload = ["cap_plane.txt", "midway.tif", "fullway.tif", "binary_image.jpg", "debug1.tif", "debug2.tif", "image_ang.jpg"]
 
     if not is_cap_plane:  # find_z_plane and full-capture
+        pre_line_files = 0
+        inside_pre_line_files = None
         for subdir, dirs, files in os.walk(scans_and_find_planes_path):
             for file_name in files:
                 if file_name == "configuration.txt" and os.path.basename(
                         subdir) == "PreSequence":  # dont upload configuration file in PreSequence
                     continue
-                elif file_name in file_dont_upload or re.findall("^SmallImage_\d+\.tif$", file_name) or re.findall("^stack\d+\.jpg$", file_name) or re.findall("^Zn_\d+_\d+\.jpg$", file_name):
+                elif file_name in file_dont_upload or re.search("^SmallImage_\d+\.tif$", file_name) or re.search("^stack\d+\.jpg$", file_name) or re.search("^Zn_\d+_\d+\.jpg$", file_name):
                   continue
+                elif file_name == "configuration.txt":
+                    file_path = os.path.join(subdir, file_name)
+                    with open(file_path) as f:
+                        lines = f.readlines()
+                        floats_numbers = re.findall("\d+\.\d+" ,lines[2])
+                        get_ichor_api(RecordingVariablesApi).recordings_variables_post(RecordingVariable(
+                            recording_id=recording.recording_id,
+                            variable_name="glass_position",
+                            float_value=(float(floats_numbers[0]) + 1)
+                        ))
+                        exposure = re.findall("\d+", lines[3])[0]
+                        get_ichor_api(RecordingVariablesApi).recordings_variables_post(RecordingVariable(
+                            recording_id=recording.recording_id,
+                            variable_name="exposure",
+                            float_value=float(exposure)
+                        ))
+                        string_floats_xyz = re.findall("\d+\.\d+", lines[4])
+                        floats_xyz = [float(i) for i in string_floats_xyz]
+                        get_ichor_api(RecordingVariablesApi).recordings_variables_post(RecordingVariable(
+                            recording_id=recording.recording_id,
+                            variable_name="position_xyz",
+                            json_value=floats_xyz
+                        ))
+                        continue
+                elif file_name == "Line.txt":
+                    file_path = os.path.join(subdir, file_name)
+                    with open(file_path) as f:
+                        lines = f.readlines()
+                        result = [int(i) for i in lines]
+                        get_ichor_api(RecordingVariablesApi).recordings_variables_post(RecordingVariable(
+                            recording_id=recording.recording_id,
+                            variable_name="line_timestamps",
+                            json_value=result
+                        ))
+                    continue
+                elif file_name == "wide_cam_timestamp.txt":
+                    file_path = os.path.join(subdir, file_name)
+                    with open(file_path) as f:
+                        lines = f.readlines()
+                        result = [int(i) for i in lines]
+                        get_ichor_api(RecordingVariablesApi).recordings_variables_post(RecordingVariable(
+                            recording_id=recording.recording_id,
+                            variable_name="wide_timestamps",
+                            json_value=result
+                        ))
+                    continue
+                elif re.search("^Line_\d+\.tif", file_name):
+                    inside_pre_line_files = subdir
+                    pre_line_files += 1
+                    continue
+                elif file_name == "angle.txt":
+                    file_path = os.path.join(subdir, file_name)
+                    with open(file_path) as f:
+                        lines = f.readlines()
+                        angle_deg = re.findall("\d+\.\d+" ,lines[0])[0]
+                        get_ichor_api(RecordingVariablesApi).recordings_variables_post(RecordingVariable(
+                            recording_id=recording.recording_id,
+                            variable_name="angle",
+                            float_value=float(angle_deg)
+                        ))
+                    continue
+                elif file_name == "fast_scan.txt":
+                    file_path = os.path.join(subdir, file_name)
+                    with open(file_path) as f:
+                        lines = f.readlines()
+                        floats_fast_scan = []
+                        for i in range(int((len(lines)-2)/2)):
+                            floats_fast_scan.append(float(re.findall("\d+\.\d+", lines[i])[0]))
+                        get_ichor_api(RecordingVariablesApi).recordings_variables_post(RecordingVariable(
+                            recording_id=recording.recording_id,
+                            variable_name="focus_wide_positions",
+                            json_value=floats_fast_scan
+                        ))
+                        focus_best_position = float(re.findall("\d+\.\d+", lines[len(lines)-1])[0])
+                        get_ichor_api(RecordingVariablesApi).recordings_variables_post(RecordingVariable(
+                            recording_id=recording.recording_id,
+                            variable_name="focus_best_position",
+                            float_value=focus_best_position
+                        ))
+                    continue
+                elif file_name == "motors_position_file.txt":
+                    #TODO
+                    continue
+
                 file_path = os.path.join(subdir, file_name)
                 create_file_and_upload_wrapper(scans_and_find_planes_path, file_path, recording)
+        if inside_pre_line_files:
+            upload_index = int(pre_line_files/2)
+            file_name = "Line_{}.tif".format(upload_index)
+            file_path = os.path.join(inside_pre_line_files, file_name)
+            create_file_and_upload_wrapper(scans_and_find_planes_path, file_path, recording)
 
     else:
         # cap_plane type is the only one that not recursive inside another directories
+        files_to_link = {}
         counter = 0
         positions_index = {}
         positions = {}
@@ -462,7 +589,8 @@ def create_files(scans_and_find_planes_path, recording, is_cap_plane=False):
             file_path = os.path.join(scans_and_find_planes_path, filename)
             # checking if it is a file
             if os.path.isfile(file_path) and re.search("^Scan_\d+_\d+_\d+\.tif$", filename):
-                create_file_and_upload_wrapper(scans_and_find_planes_path, file_path, recording, counter_seq=counter_seq)
+                create_file_and_upload_wrapper(scans_and_find_planes_path, file_path, recording,
+                                               counter_seq=counter_seq, files_to_link=files_to_link)
                 z, x, y = extract_z_x_y(filename)
                 if z != curr_z:
                     curr_z = z
@@ -490,6 +618,7 @@ def create_files(scans_and_find_planes_path, recording, is_cap_plane=False):
             variable_name="positions_index", recording_id=recording.recording_id, json_value=positions_index))
         get_ichor_api(RecordingVariablesApi).recordings_variables_post(RecordingVariable(
             variable_name="positions", recording_id=recording.recording_id, json_value=positions))
+        return files_to_link
 
 
 def create_patient(patient_dir_path, data_source):
