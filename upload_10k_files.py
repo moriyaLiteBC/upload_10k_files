@@ -568,9 +568,9 @@ def create_files(scans_and_find_planes_path, recording, is_cap_plane=False):
                             float_value=focus_best_position
                         ))
                     continue
-                elif file_name == "motors_position_file.txt":
-                    #TODO
-                    continue
+                # elif file_name == "motors_position_file.txt":
+                #     #TODO
+                #     continue
 
                 file_path = os.path.join(subdir, file_name)
                 create_file_and_upload_wrapper(scans_and_find_planes_path, file_path, recording)
