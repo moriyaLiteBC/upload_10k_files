@@ -8,6 +8,7 @@ import base64
 from threading import Lock
 import re
 
+from ichor.model.recording1 import Recording1
 from ichor.model.recording_variable import RecordingVariable
 
 lock = threading.Lock()
@@ -487,6 +488,10 @@ def create_files(scans_and_find_planes_path, recording, is_cap_plane=False):
                     file_path = os.path.join(subdir, file_name)
                     with open(file_path) as f:
                         lines = f.readlines()
+                        data_str = re.findall(r'\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2}', lines[0])[0]
+                        date_created = datetime.datetime.strptime(data_str, "%d/%m/%Y %H:%M:%S")
+                        get_ichor_api(RecordingsApi).recordings_recording_id_patch(recording_id=recording.recording_id,
+                                                                                   recording1=Recording1(date_created=date_created))
                         floats_numbers = re.findall("\d+\.\d+" ,lines[2])
                         get_ichor_api(RecordingVariablesApi).recordings_variables_post(RecordingVariable(
                             recording_id=recording.recording_id,
