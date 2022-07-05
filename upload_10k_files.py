@@ -187,6 +187,8 @@ def check_classification(file):
         return "PRE_LINE_RESULTS", None
     elif file == "best_image.tif":
         return "FOCUS_IMAGE_RESULT", None
+    elif file == "motors_position_file.txt":
+        return "MOTORS_POSITION", None
     else:
         return "OTHER", None
 
